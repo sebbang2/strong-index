@@ -32,6 +32,7 @@ HISTORY_FILE = OUTPUT_DIR / "stong_index.csv"  # 요구사항의 파일명(stong
 INDEX_HISTORY_FILE = OUTPUT_DIR / "index_snapshots.csv"
 NAVER_FINANCE = "https://finance.naver.com"
 PRICE_API = "https://api.finance.naver.com/siseJson.naver"
+NAVER_CHART_API = "https://api.stock.naver.com/chart/domestic"
 NAVER_STOCK_LIST_API = "https://api.stock.naver.com/stock/exchange/KOSPI/marketValue"
 KOSPI_SYMBOL = "KOSPI"
 KOSDAQ_SYMBOL = "KOSDAQ"
@@ -298,35 +299,49 @@ def parse_price_rows(payload: str) -> dict[date, float]:
     return {day: close for day, (close, _) in parse_price_volume_rows(payload).items()}
 
 
-def fetch_prices(session: requests.Session, symbol: str, start: date, end: date) -> dict[date, float]:
+def fetch_chart_rows(session: requests.Session, symbol: str, start: date, end: date) -> dict[date, tuple[float, float]]:
+    """개편된 네이버 일봉 API에서 종가와 거래량을 읽는다."""
+    kind = "index" if symbol in {KOSPI_SYMBOL, KOSDAQ_SYMBOL} else "item"
     response = request(
         session,
-        PRICE_API,
+        f"{NAVER_CHART_API}/{kind}/{symbol}",
         params={
-            "symbol": symbol,
-            "requestType": "1",
-            "startTime": start.strftime("%Y%m%d"),
-            "endTime": end.strftime("%Y%m%d"),
-            "timeframe": "day",
+            "periodType": "dayCandle",
+            "startDateTime": start.strftime("%Y%m%d"),
+            "endDateTime": end.strftime("%Y%m%d"),
         },
     )
-    return parse_price_rows(response.text)
+    try:
+        payload = response.json()
+    except ValueError as error:
+        raise StrongIndexError("네이버 일봉 시세 응답을 해석하지 못했습니다.") from error
+    rows = payload.get("priceInfos", []) if isinstance(payload, dict) else []
+    records: dict[date, tuple[float, float]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        date_text = re.sub(r"\\D", "", str(row.get("localDate", "")))
+        if len(date_text) != 8:
+            continue
+        try:
+            day = date(int(date_text[:4]), int(date_text[4:6]), int(date_text[6:]))
+            close = float(str(row.get("closePrice", "")).replace(",", ""))
+            volume = float(str(row.get("accumulatedTradingVolume", 0)).replace(",", ""))
+        except (TypeError, ValueError):
+            continue
+        if close > 0:
+            records[day] = (close, volume)
+    if not records:
+        raise StrongIndexError(f"네이버 {symbol} 일봉 시세가 비어 있습니다.")
+    return records
+
+
+def fetch_prices(session: requests.Session, symbol: str, start: date, end: date) -> dict[date, float]:
+    return {day: close for day, (close, _) in fetch_chart_rows(session, symbol, start, end).items()}
 
 
 def fetch_price_volumes(session: requests.Session, symbol: str, start: date, end: date) -> dict[date, tuple[float, float]]:
-    response = request(
-        session,
-        PRICE_API,
-        params={
-            "symbol": symbol,
-            "requestType": "1",
-            "startTime": start.strftime("%Y%m%d"),
-            "endTime": end.strftime("%Y%m%d"),
-            "timeframe": "day",
-        },
-    )
-    return parse_price_volume_rows(response.text)
-
+    return fetch_chart_rows(session, symbol, start, end)
 
 def naver_industry(session: requests.Session, stock: Stock) -> str:
     """분류 규칙에 없는 종목에 쓸 네이버증권의 업종명을 찾는다."""
