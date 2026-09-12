@@ -15,6 +15,7 @@ import argparse
 import ast
 import csv
 import json
+import os
 import re
 import sys
 import time
@@ -299,7 +300,7 @@ def parse_price_rows(payload: str) -> dict[date, float]:
     return {day: close for day, (close, _) in parse_price_volume_rows(payload).items()}
 
 
-def fetch_chart_rows(session: requests.Session, symbol: str, start: date, end: date) -> dict[date, tuple[float, float]]:
+def fetch_naver_chart_rows(session: requests.Session, symbol: str, start: date, end: date) -> dict[date, tuple[float, float]]:
     """개편된 네이버 일봉 API에서 종가와 거래량을 읽는다."""
     kind = "index" if symbol in {KOSPI_SYMBOL, KOSDAQ_SYMBOL} else "item"
     response = request(
@@ -348,6 +349,78 @@ def fetch_chart_rows(session: requests.Session, symbol: str, start: date, end: d
         raise StrongIndexError(f"네이버 {symbol} 일봉 시세가 비어 있습니다.")
     return records
 
+
+
+def toss_access_token(session: requests.Session) -> str:
+    client_id = os.getenv("TOSS_CLIENT_ID", "").strip()
+    client_secret = os.getenv("TOSS_CLIENT_SECRET", "").strip()
+    if not client_id or not client_secret:
+        raise StrongIndexError("Toss Open API 인증 정보가 없습니다.")
+    try:
+        response = session.post(
+            "https://openapi.tossinvest.com/oauth2/token",
+            data={
+                "grant_type": "client_credentials",
+                "client_id": client_id,
+                "client_secret": client_secret,
+            },
+            timeout=15,
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except (requests.RequestException, ValueError) as error:
+        raise StrongIndexError(f"토스증권 API 인증에 실패했습니다: {error}") from error
+    token = str(payload.get("access_token", ""))
+    if not token:
+        raise StrongIndexError("토스증권 API 인증 토큰을 받지 못했습니다.")
+    return token
+
+
+def fetch_toss_chart_rows(session: requests.Session, symbol: str) -> dict[date, tuple[float, float]]:
+    token = toss_access_token(session)
+    if symbol in {KOSPI_SYMBOL, KOSDAQ_SYMBOL}:
+        url = f"https://openapi.tossinvest.com/api/v1/market-indicators/{symbol}/candles"
+        params = {"interval": "1d", "count": 200}
+    else:
+        url = "https://openapi.tossinvest.com/api/v1/candles"
+        params = {"symbol": symbol, "interval": "1d", "count": 200}
+    try:
+        response = session.get(
+            url,
+            headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+            params=params,
+            timeout=15,
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except (requests.RequestException, ValueError) as error:
+        raise StrongIndexError(f"토스증권 {symbol} 일봉 시세를 읽지 못했습니다: {error}") from error
+    result = payload.get("result", {}) if isinstance(payload, dict) else {}
+    candles = result.get("candles", []) if isinstance(result, dict) else []
+    records: dict[date, tuple[float, float]] = {}
+    for candle in candles:
+        if not isinstance(candle, dict):
+            continue
+        date_text = str(candle.get("timestamp", ""))[:10].replace("-", "")
+        if len(date_text) != 8:
+            continue
+        try:
+            day = date(int(date_text[:4]), int(date_text[4:6]), int(date_text[6:]))
+            close = float(str(candle.get("closePrice", "")).replace(",", ""))
+            volume = float(str(candle.get("volume", 0)).replace(",", ""))
+        except (TypeError, ValueError):
+            continue
+        if close > 0:
+            records[day] = (close, volume)
+    if len(records) < 120:
+        raise StrongIndexError(f"토스증권 {symbol} 일봉 데이터가 120일 미만입니다.")
+    return records
+
+
+def fetch_chart_rows(session: requests.Session, symbol: str, start: date, end: date) -> dict[date, tuple[float, float]]:
+    if os.getenv("TOSS_CLIENT_ID") and os.getenv("TOSS_CLIENT_SECRET"):
+        return fetch_toss_chart_rows(session, symbol)
+    return fetch_naver_chart_rows(session, symbol, start, end)
 
 def fetch_prices(session: requests.Session, symbol: str, start: date, end: date) -> dict[date, float]:
     return {day: close for day, (close, _) in fetch_chart_rows(session, symbol, start, end).items()}
