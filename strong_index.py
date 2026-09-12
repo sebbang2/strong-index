@@ -249,7 +249,19 @@ def fetch_kospi_stocks(session: requests.Session, pause: float) -> list[Stock]:
             if name:
                 stocks[match.group(1)] = Stock(match.group(1), name)
 
-    if len(stocks) < 100:
+    if len(stocks) < 100 and HISTORY_FILE.exists():
+        # 네이버가 자동화 요청을 일시 차단하면 기존에 저장된 종목을 임시로 재사용한다.
+        try:
+            with HISTORY_FILE.open("r", encoding="utf-8-sig", newline="") as file:
+                for item in csv.DictReader(file):
+                    code = str(item.get("code", "")).strip()
+                    name = " ".join(str(item.get("name", "")).split())
+                    if re.fullmatch(r"\d{6}", code) and name:
+                        stocks[code] = Stock(code, name)
+        except OSError:
+            pass
+
+    if len(stocks) < 20:
         raise StrongIndexError(
             f"네이버증권 코스피 종목 목록을 충분히 읽지 못했습니다(수집: {len(stocks)}개)."
         )
