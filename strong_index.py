@@ -32,7 +32,7 @@ HISTORY_FILE = OUTPUT_DIR / "stong_index.csv"  # 요구사항의 파일명(stong
 INDEX_HISTORY_FILE = OUTPUT_DIR / "index_snapshots.csv"
 NAVER_FINANCE = "https://finance.naver.com"
 PRICE_API = "https://api.finance.naver.com/siseJson.naver"
-NAVER_STOCK_LIST_API = "https://m.stock.naver.com/front-api/stock/domestic/stockList"
+NAVER_STOCK_LIST_API = "https://stock.naver.com/api/domestic/market/stock/default"
 KOSPI_SYMBOL = "KOSPI"
 KOSDAQ_SYMBOL = "KOSDAQ"
 ETF_DISPLAY_LIMIT = 3
@@ -190,15 +190,16 @@ def fetch_kospi_stocks(session: requests.Session, pause: float) -> list[Stock]:
         visit(payload)
         return found
 
-    for page in range(1, 31):
+    for page in range(3):
         response = request(
             session,
             NAVER_STOCK_LIST_API,
             params={
-                "sortType": "marketValue",
-                "category": "KOSPI",
-                "page": page,
-                "pageSize": 100,
+                "tradeType": "KRX",
+                "marketType": "KOSPI",
+                "orderType": "marketSum",
+                "startIdx": page * 5000,
+                "pageSize": 5000,
             },
         )
         try:
@@ -226,7 +227,7 @@ def fetch_kospi_stocks(session: requests.Session, pause: float) -> list[Stock]:
             if re.fullmatch(r"\d{6}", code) and name:
                 stocks[code] = Stock(code, name)
 
-        if len(stocks) == before or len(page_items) < 100:
+        if len(stocks) == before or len(page_items) < 5000:
             break
         time.sleep(pause)
 
