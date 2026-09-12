@@ -305,11 +305,7 @@ def fetch_chart_rows(session: requests.Session, symbol: str, start: date, end: d
     response = request(
         session,
         f"{NAVER_CHART_API}/{kind}/{symbol}",
-        params={
-            "periodType": "dayCandle",
-            "startDateTime": start.strftime("%Y%m%d"),
-            "endDateTime": end.strftime("%Y%m%d"),
-        },
+        params={"periodType": "dayCandle"},
     )
     try:
         payload = response.json()
