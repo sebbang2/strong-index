@@ -327,6 +327,23 @@ def fetch_chart_rows(session: requests.Session, symbol: str, start: date, end: d
             continue
         if close > 0:
             records[day] = (close, volume)
+    if len(records) < 120:
+        # 새 차트 API의 최신 구간에 과거 구간 API를 합쳐 120일 분석 창을 확보한다.
+        try:
+            legacy = request(
+                session,
+                PRICE_API,
+                params={
+                    "symbol": symbol,
+                    "requestType": "1",
+                    "startTime": start.strftime("%Y%m%d"),
+                    "endTime": end.strftime("%Y%m%d"),
+                    "timeframe": "day",
+                },
+            )
+            records.update(parse_price_volume_rows(legacy.text))
+        except StrongIndexError:
+            pass
     if not records:
         raise StrongIndexError(f"네이버 {symbol} 일봉 시세가 비어 있습니다.")
     return records
