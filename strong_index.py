@@ -229,6 +229,27 @@ def fetch_kospi_stocks(session: requests.Session, pause: float) -> list[Stock]:
         time.sleep(pause)
 
     if len(stocks) < 100:
+        # API가 빈 응답을 주는 경우에도 새 네이버 화면의 서버 렌더링 표를 사용한다.
+        response = request(
+            session,
+            "https://stock.naver.com/market/stock/kr/stocklist/capitalization",
+        )
+        soup = BeautifulSoup(response.text, "html.parser")
+        for row in soup.select("table tbody tr"):
+            image = row.select_one("img[src*='/Stock']")
+            if image is None:
+                continue
+            match = re.search(r"Stock(\\d{6})\\.svg", image.get("src", ""))
+            if match is None:
+                continue
+            name = image.get("alt", "").removesuffix(" 로고").strip()
+            if not name:
+                cells = row.select("td")
+                name = cells[1].get_text(" ", strip=True) if len(cells) > 1 else ""
+            if name:
+                stocks[match.group(1)] = Stock(match.group(1), name)
+
+    if len(stocks) < 100:
         raise StrongIndexError(
             f"네이버증권 코스피 종목 목록을 충분히 읽지 못했습니다(수집: {len(stocks)}개)."
         )
