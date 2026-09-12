@@ -1060,8 +1060,8 @@ def main() -> int:
                 raise StrongIndexError("KOSDAQ index history is insufficient for its 20-day average.")
             market_day = max(benchmark)
             if market_day != end:
-                print(f"{end.isoformat()}은 정규장 거래일이 아닙니다. 최근 거래일({market_day.isoformat()}) 데이터는 유지합니다.")
-                return 0
+                print(f"{end.isoformat()}은 정규장 거래일이 아니므로 최근 거래일({market_day.isoformat()}) 기준으로 저장합니다.")
+                end = market_day
             run_date = market_day.isoformat()
             index_snapshots = [
                 make_index_snapshot(KOSPI_SYMBOL, benchmark),
