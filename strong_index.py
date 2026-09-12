@@ -32,7 +32,7 @@ HISTORY_FILE = OUTPUT_DIR / "stong_index.csv"  # 요구사항의 파일명(stong
 INDEX_HISTORY_FILE = OUTPUT_DIR / "index_snapshots.csv"
 NAVER_FINANCE = "https://finance.naver.com"
 PRICE_API = "https://api.finance.naver.com/siseJson.naver"
-NAVER_STOCK_LIST_API = "https://stock.naver.com/api/domestic/market/stock/default"
+NAVER_STOCK_LIST_API = "https://api.stock.naver.com/stock/exchange/KOSPI/marketValue"
 KOSPI_SYMBOL = "KOSPI"
 KOSDAQ_SYMBOL = "KOSDAQ"
 ETF_DISPLAY_LIMIT = 3
@@ -179,7 +179,7 @@ def fetch_kospi_stocks(session: requests.Session, pause: float) -> list[Stock]:
 
         def visit(node: object) -> None:
             if isinstance(node, dict):
-                if any(key in node for key in ("itemCode", "itemcode", "code", "reutersCode")):
+                if any(key in node for key in ("itemCode", "itemcode", "symbolCode", "code", "reutersCode")):
                     found.append(node)
                 for value in node.values():
                     visit(value)
@@ -190,16 +190,13 @@ def fetch_kospi_stocks(session: requests.Session, pause: float) -> list[Stock]:
         visit(payload)
         return found
 
-    for page in range(3):
+    for page in range(1, 100):
         response = request(
             session,
             NAVER_STOCK_LIST_API,
             params={
-                "tradeType": "KRX",
-                "marketType": "KOSPI",
-                "orderType": "marketSum",
-                "startIdx": page * 5000,
-                "pageSize": 5000,
+                "page": page,
+                "pageSize": 60,
             },
         )
         try:
@@ -211,14 +208,14 @@ def fetch_kospi_stocks(session: requests.Session, pause: float) -> list[Stock]:
         before = len(stocks)
         for item in page_items:
             raw_code = next(
-                (item.get(key) for key in ("itemCode", "itemcode", "code", "reutersCode")),
+                (item.get(key) for key in ("itemCode", "itemcode", "symbolCode", "code", "reutersCode")),
                 "",
             )
             code = str(raw_code or "").upper().removeprefix("A")
             name = next(
                 (
                     item.get(key)
-                    for key in ("itemName", "itemname", "name", "stockName", "stockNameKr")
+                    for key in ("itemName", "itemname", "stockName", "stockNameKr", "stockNameKor", "stockNameEng", "name")
                     if item.get(key)
                 ),
                 "",
@@ -227,7 +224,7 @@ def fetch_kospi_stocks(session: requests.Session, pause: float) -> list[Stock]:
             if re.fullmatch(r"\d{6}", code) and name:
                 stocks[code] = Stock(code, name)
 
-        if len(stocks) == before or len(page_items) < 5000:
+        if len(stocks) == before or len(page_items) < 60:
             break
         time.sleep(pause)
 
