@@ -210,9 +210,9 @@ def fetch_kospi_stocks(session: requests.Session, as_of: date, pause: float) -> 
         name = " ".join(str(row.get("ISU_ABBRV") or row.get("ISU_NM") or "").split())
         if market in {"KOSPI", "KOSDAQ"} and re.fullmatch(r"\d{6}", code) and name:
             stocks[code] = Stock(code, name)
-    if len(stocks) < 1000:
-        raise StrongIndexError(f"KRX 종목기본정보에서 KOSPI·KOSDAQ 종목을 충분히 읽지 못했습니다(수집: {len(stocks)}개).")
-    print(f"KRX KOSPI·KOSDAQ 종목 목록 최종 수집: {len(stocks)}개", flush=True)
+    if len(stocks) < 500:
+        raise StrongIndexError(f"KRX 유가증권(KOSPI) 종목기본정보를 충분히 읽지 못했습니다(수집: {len(stocks)}개).")
+    print(f"KRX 유가증권(KOSPI) 종목 목록 최종 수집: {len(stocks)}개", flush=True)
     return list(stocks.values())
 
 def parse_price_volume_rows(payload: str) -> dict[date, tuple[float, float]]:
