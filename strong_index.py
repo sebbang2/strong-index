@@ -51,6 +51,9 @@ HEADERS = {
     ),
     "Referer": "https://finance.naver.com/",
     "Accept-Language": "ko-KR,ko;q=0.9",
+    "Accept": "application/json, text/plain, */*",
+    "Origin": "https://stock.naver.com",
+    "Referer": "https://stock.naver.com/",
 }
 CSV_FIELDS = [
     "run_date",
@@ -210,27 +213,20 @@ def fetch_kospi_stocks(session: requests.Session, pause: float) -> list[Stock]:
 
     for page in range(1, 31):
         try:
-            response = request(session, "https://finance.naver.com/sise/sise_market_sum.naver", params={"sosok": 0, "page": page})
+            response = request(session, "https://stock.naver.com/market/stock/kr/stocklist/capitalization")
         except StrongIndexError:
             break
         soup = BeautifulSoup(response.text, "html.parser")
         before = len(stocks)
-        for link in soup.select("a[href*='/item/main.naver?code=']"):
-            match = re.search(r"code=(\d{6})", link.get("href", ""))
+        for image in soup.select("img[src*='/Stock']"):
+            match = re.search(r"Stock(\d{6})\.svg", image.get("src", ""))
             if match:
-                add(match.group(1), link.get_text(" ", strip=True))
+                add(match.group(1), image.get("alt", "").removesuffix(" 로고"))
         print(f"코스피 HTML 목록: {len(stocks)}개 (페이지 {page})", flush=True)
         if len(stocks) == before:
             break
         time.sleep(pause)
 
-    if len(stocks) < 100 and HISTORY_FILE.exists():
-        try:
-            with HISTORY_FILE.open("r", encoding="utf-8-sig", newline="") as file:
-                for item in csv.DictReader(file):
-                    add(item.get("code"), item.get("name"))
-        except OSError:
-            pass
     if len(stocks) < 20:
         raise StrongIndexError(f"네이버증권 코스피 종목 목록을 충분히 읽지 못했습니다(수집: {len(stocks)}개).")
     print(f"코스피 종목 목록 최종 수집: {len(stocks)}개", flush=True)
