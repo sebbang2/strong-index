@@ -169,16 +169,17 @@ def request(session: requests.Session, url: str, **kwargs: object) -> requests.R
 
 
 def fetch_kospi_stocks(session: requests.Session, pause: float) -> list[Stock]:
-    """네이버증권의 코스피 시가총액 목록을 JSON API 우선으로 읽는다.
-
-    2026년 개편으로 기존 finance.naver.com HTML 표가 stock.naver.com으로
-    전환되었으므로, 화면의 링크 구조에 의존하지 않고 구조화된 목록 API를 사용한다.
-    """
+    """네이버 KOSPI 전체 종목을 JSON API와 HTML 페이지로 보완 수집한다."""
     stocks: dict[str, Stock] = {}
+
+    def add(code: object, name: object) -> None:
+        normalized_code = str(code or "").upper().removeprefix("A")
+        normalized_name = " ".join(str(name or "").split())
+        if re.fullmatch(r"\d{6}", normalized_code) and normalized_name:
+            stocks[normalized_code] = Stock(normalized_code, normalized_name)
 
     def collect_items(payload: object) -> list[dict[str, object]]:
         found: list[dict[str, object]] = []
-
         def visit(node: object) -> None:
             if isinstance(node, dict):
                 if any(key in node for key in ("itemCode", "itemcode", "symbolCode", "code", "reutersCode")):
@@ -188,85 +189,51 @@ def fetch_kospi_stocks(session: requests.Session, pause: float) -> list[Stock]:
             elif isinstance(node, list):
                 for value in node:
                     visit(value)
-
         visit(payload)
         return found
 
-    for page in range(1, 100):
-        response = request(
-            session,
-            NAVER_STOCK_LIST_API,
-            params={
-                "page": page,
-                "pageSize": 60,
-            },
-        )
+    for page in range(1, 51):
+        response = request(session, NAVER_STOCK_LIST_API, params={"page": page, "pageSize": 100})
         try:
             payload = response.json()
         except ValueError as error:
             raise StrongIndexError("네이버증권 종목 목록 응답을 해석하지 못했습니다.") from error
-
-        page_items = collect_items(payload)
         before = len(stocks)
-        for item in page_items:
-            raw_code = next(
-                (item.get(key) for key in ("itemCode", "itemcode", "symbolCode", "code", "reutersCode")),
-                "",
-            )
-            code = str(raw_code or "").upper().removeprefix("A")
-            name = next(
-                (
-                    item.get(key)
-                    for key in ("itemName", "itemname", "stockName", "stockNameKr", "stockNameKor", "stockNameEng", "name")
-                    if item.get(key)
-                ),
-                "",
-            )
-            name = " ".join(str(name).split())
-            if re.fullmatch(r"\d{6}", code) and name:
-                stocks[code] = Stock(code, name)
-
-        if len(stocks) == before or len(page_items) < 60:
+        for item in collect_items(payload):
+            code = next((item.get(key) for key in ("itemCode", "itemcode", "symbolCode", "code", "reutersCode")), "")
+            name = next((item.get(key) for key in ("itemName", "itemname", "stockName", "stockNameKr", "stockNameKor", "stockNameEng", "name") if item.get(key)), "")
+            add(code, name)
+        print(f"코스피 JSON 목록: {len(stocks)}개 (페이지 {page})", flush=True)
+        if len(stocks) == before:
             break
         time.sleep(pause)
 
-    if len(stocks) < 100:
-        # API가 빈 응답을 주는 경우에도 새 네이버 화면의 서버 렌더링 표를 사용한다.
-        response = request(
-            session,
-            "https://stock.naver.com/market/stock/kr/stocklist/capitalization",
-        )
+    for page in range(1, 31):
+        try:
+            response = request(session, "https://finance.naver.com/sise/sise_market_sum.naver", params={"sosok": 0, "page": page})
+        except StrongIndexError:
+            break
         soup = BeautifulSoup(response.text, "html.parser")
-        for row in soup.select("table tbody tr"):
-            image = row.select_one("img[src*='/Stock']")
-            if image is None:
-                continue
-            match = re.search(r"Stock(\\d{6})\\.svg", image.get("src", ""))
-            if match is None:
-                continue
-            name = image.get("alt", "").removesuffix(" 로고").strip()
-            if not name:
-                cells = row.select("td")
-                name = cells[1].get_text(" ", strip=True) if len(cells) > 1 else ""
-            if name:
-                stocks[match.group(1)] = Stock(match.group(1), name)
+        before = len(stocks)
+        for link in soup.select("a[href*='/item/main.naver?code=']"):
+            match = re.search(r"code=(\d{6})", link.get("href", ""))
+            if match:
+                add(match.group(1), link.get_text(" ", strip=True))
+        print(f"코스피 HTML 목록: {len(stocks)}개 (페이지 {page})", flush=True)
+        if len(stocks) == before:
+            break
+        time.sleep(pause)
 
     if len(stocks) < 100 and HISTORY_FILE.exists():
-        # 네이버가 자동화 요청을 일시 차단하면 기존에 저장된 종목을 임시로 재사용한다.
         try:
             with HISTORY_FILE.open("r", encoding="utf-8-sig", newline="") as file:
                 for item in csv.DictReader(file):
-                    code = str(item.get("code", "")).strip()
-                    name = " ".join(str(item.get("name", "")).split())
-                    if re.fullmatch(r"\d{6}", code) and name:
-                        stocks[code] = Stock(code, name)
+                    add(item.get("code"), item.get("name"))
         except OSError:
             pass
-
     if len(stocks) < 20:
-        raise StrongIndexError(
-            f"네이버증권 코스피 종목 목록을 충분히 읽지 못했습니다(수집: {len(stocks)}개)."
-        )
+        raise StrongIndexError(f"네이버증권 코스피 종목 목록을 충분히 읽지 못했습니다(수집: {len(stocks)}개).")
+    print(f"코스피 종목 목록 최종 수집: {len(stocks)}개", flush=True)
     return list(stocks.values())
 
 def parse_price_volume_rows(payload: str) -> dict[date, tuple[float, float]]:
