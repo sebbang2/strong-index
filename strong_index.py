@@ -51,9 +51,6 @@ HEADERS = {
     ),
     "Referer": "https://finance.naver.com/",
     "Accept-Language": "ko-KR,ko;q=0.9",
-    "Accept": "application/json, text/plain, */*",
-    "Origin": "https://stock.naver.com",
-    "Referer": "https://stock.naver.com/",
 }
 CSV_FIELDS = [
     "run_date",
@@ -196,7 +193,11 @@ def fetch_kospi_stocks(session: requests.Session, pause: float) -> list[Stock]:
         return found
 
     for page in range(1, 51):
-        response = request(session, NAVER_STOCK_LIST_API, params={"page": page, "pageSize": 100})
+        try:
+            response = request(session, NAVER_STOCK_LIST_API, params={"page": page, "pageSize": 100})
+        except StrongIndexError as error:
+            print(f"코스피 JSON 목록 API 건너뜀: {error}", flush=True)
+            break
         try:
             payload = response.json()
         except ValueError as error:
