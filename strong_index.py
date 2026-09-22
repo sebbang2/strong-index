@@ -35,6 +35,8 @@ NAVER_FINANCE = "https://finance.naver.com"
 PRICE_API = "https://api.finance.naver.com/siseJson.naver"
 NAVER_CHART_API = "https://api.stock.naver.com/chart/domestic"
 NAVER_STOCK_LIST_API = "https://api.stock.naver.com/stock/exchange/KOSPI/marketValue"
+KRX_BASE_INFO_API = "https://data-dbg.krx.co.kr/svc/apis/sto/stk_isu_base_info"
+KRX_MARKET_CAPS: dict[str, int] = {}
 KOSPI_SYMBOL = "KOSPI"
 KOSDAQ_SYMBOL = "KOSDAQ"
 ETF_DISPLAY_LIMIT = 3
@@ -168,69 +170,49 @@ def request(session: requests.Session, url: str, **kwargs: object) -> requests.R
         raise StrongIndexError(f"네이버증권에 연결하지 못했습니다: {error}") from error
 
 
-def fetch_kospi_stocks(session: requests.Session, pause: float) -> list[Stock]:
-    """네이버 KOSPI 전체 종목을 JSON API와 HTML 페이지로 보완 수집한다."""
-    stocks: dict[str, Stock] = {}
+def fetch_kospi_stocks(session: requests.Session, as_of: date, pause: float) -> list[Stock]:
+    """KRX 종목기본정보에서 KOSPI·KOSDAQ 전체 상장종목을 읽는다."""
+    api_key = os.getenv("KRX_API_KEY", "").strip()
+    if not api_key:
+        raise StrongIndexError("KRX_API_KEY가 GitHub Actions Secret에 등록되지 않았습니다.")
 
-    def add(code: object, name: object) -> None:
-        normalized_code = str(code or "").upper().removeprefix("A")
-        normalized_name = " ".join(str(name or "").split())
-        if re.fullmatch(r"\d{6}", normalized_code) and normalized_name:
-            stocks[normalized_code] = Stock(normalized_code, normalized_name)
-
-    def collect_items(payload: object) -> list[dict[str, object]]:
-        found: list[dict[str, object]] = []
-        def visit(node: object) -> None:
-            if isinstance(node, dict):
-                if any(key in node for key in ("itemCode", "itemcode", "symbolCode", "code", "reutersCode")):
-                    found.append(node)
-                for value in node.values():
-                    visit(value)
-            elif isinstance(node, list):
-                for value in node:
-                    visit(value)
-        visit(payload)
-        return found
-
-    for page in range(1, 51):
+    rows: list[dict[str, object]] = []
+    # 휴장일에는 최근 영업일 자료를 찾기 위해 최대 10일 역산한다.
+    for offset in range(0, 11):
+        bas_dd = (as_of - timedelta(days=offset)).strftime("%Y%m%d")
         try:
-            response = request(session, NAVER_STOCK_LIST_API, params={"page": page, "pageSize": 100})
-        except StrongIndexError as error:
-            print(f"코스피 JSON 목록 API 건너뜀: {error}", flush=True)
-            break
-        try:
+            response = session.get(
+                KRX_BASE_INFO_API,
+                params={"basDd": bas_dd, "AUTH_KEY": api_key},
+                headers={"Accept": "application/json"},
+                timeout=20,
+            )
+            response.raise_for_status()
             payload = response.json()
-        except ValueError as error:
-            raise StrongIndexError("네이버증권 종목 목록 응답을 해석하지 못했습니다.") from error
-        before = len(stocks)
-        for item in collect_items(payload):
-            code = next((item.get(key) for key in ("itemCode", "itemcode", "symbolCode", "code", "reutersCode")), "")
-            name = next((item.get(key) for key in ("itemName", "itemname", "stockName", "stockNameKr", "stockNameKor", "stockNameEng", "name") if item.get(key)), "")
-            add(code, name)
-        print(f"코스피 JSON 목록: {len(stocks)}개 (페이지 {page})", flush=True)
-        if len(stocks) == before:
+        except (requests.RequestException, ValueError) as error:
+            if offset == 10:
+                raise StrongIndexError(f"KRX 종목기본정보 API에 연결하지 못했습니다: {error}") from error
+            continue
+        rows = payload.get("OutBlock_1", []) if isinstance(payload, dict) else []
+        if not isinstance(rows, list):
+            rows = []
+        if rows:
+            print(f"KRX 종목기본정보 기준일: {bas_dd}", flush=True)
             break
         time.sleep(pause)
 
-    for page in range(1, 31):
-        try:
-            response = request(session, "https://stock.naver.com/market/stock/kr/stocklist/capitalization")
-        except StrongIndexError:
-            break
-        soup = BeautifulSoup(response.text, "html.parser")
-        before = len(stocks)
-        for image in soup.select("img[src*='/Stock']"):
-            match = re.search(r"Stock(\d{6})\.svg", image.get("src", ""))
-            if match:
-                add(match.group(1), image.get("alt", "").removesuffix(" 로고"))
-        print(f"코스피 HTML 목록: {len(stocks)}개 (페이지 {page})", flush=True)
-        if len(stocks) == before:
-            break
-        time.sleep(pause)
-
-    if len(stocks) < 20:
-        raise StrongIndexError(f"네이버증권 코스피 종목 목록을 충분히 읽지 못했습니다(수집: {len(stocks)}개).")
-    print(f"코스피 종목 목록 최종 수집: {len(stocks)}개", flush=True)
+    stocks: dict[str, Stock] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        market = str(row.get("MKT_TP_NM") or row.get("MKT_NM") or "").strip().upper()
+        code = str(row.get("ISU_SRT_CD") or row.get("ISU_CD") or "").strip().removeprefix("A")
+        name = " ".join(str(row.get("ISU_ABBRV") or row.get("ISU_NM") or "").split())
+        if market in {"KOSPI", "KOSDAQ"} and re.fullmatch(r"\d{6}", code) and name:
+            stocks[code] = Stock(code, name)
+    if len(stocks) < 1000:
+        raise StrongIndexError(f"KRX 종목기본정보에서 KOSPI·KOSDAQ 종목을 충분히 읽지 못했습니다(수집: {len(stocks)}개).")
+    print(f"KRX KOSPI·KOSDAQ 종목 목록 최종 수집: {len(stocks)}개", flush=True)
     return list(stocks.values())
 
 def parse_price_volume_rows(payload: str) -> dict[date, tuple[float, float]]:
@@ -1115,8 +1097,8 @@ def main() -> int:
     start = end - timedelta(days=max(args.lookback_days, 120) * 2 + 30)
     try:
         with requests.Session() as session:
-            print("네이버증권에서 코스피 전체 종목을 읽는 중입니다...")
-            stocks = fetch_kospi_stocks(session, args.pause)
+            print("KRX에서 KOSPI·KOSDAQ 전체 종목을 읽는 중입니다...")
+            stocks = fetch_kospi_stocks(session, end, args.pause)
             benchmark = fetch_prices(session, KOSPI_SYMBOL, start, end)
             kosdaq = fetch_prices(session, KOSDAQ_SYMBOL, start, end)
             if len(benchmark) < max(args.lookback_days, 120):
