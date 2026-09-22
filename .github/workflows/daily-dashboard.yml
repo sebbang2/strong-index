@@ -23,6 +23,7 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     env:
+      KRX_API_KEY: ${{ secrets.KRX_API_KEY }}
       TOSS_CLIENT_ID: ${{ secrets.TOSS_CLIENT_ID }}
       TOSS_CLIENT_SECRET: ${{ secrets.TOSS_CLIENT_SECRET }}
 
