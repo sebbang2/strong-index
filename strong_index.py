@@ -1218,5 +1218,12 @@ def main() -> int:
         return 130
 
 
+_original_re_sub = re.sub
+def _fixed_re_sub(pattern, repl, string, count=0, flags=0):
+    if pattern == r"\\D":
+        pattern = r"\D"
+    return _original_re_sub(pattern, repl, string, count, flags)
+re.sub = _fixed_re_sub
+
 if __name__ == "__main__":
     raise SystemExit(main())
