@@ -36,7 +36,7 @@ PRICE_API = "https://api.finance.naver.com/siseJson.naver"
 NAVER_CHART_API = "https://api.stock.naver.com/chart/domestic"
 NAVER_STOCK_LIST_API = "https://api.stock.naver.com/stock/exchange/KOSPI/marketValue"
 KRX_BASE_INFO_API = "https://data-dbg.krx.co.kr/svc/apis/sto/stk_isu_base_info"
-KRX_MARKET_CAPS: dict[str, int] = {}
+
 KRX_KOSDAQ_BASE_API = "https://data-dbg.krx.co.kr/svc/apis/sto/ksq_isu_base_info"
 KRX_KOSPI_DAILY_API = "https://data-dbg.krx.co.kr/svc/apis/sto/stk_bydd_trd"
 KRX_KOSDAQ_DAILY_API = "https://data-dbg.krx.co.kr/svc/apis/sto/ksq_bydd_trd"
@@ -205,12 +205,12 @@ def fetch_kospi_stocks(session: requests.Session, as_of: date, pause: float) -> 
     api_key = os.getenv("KRX_API_KEY", "").strip()
     if not api_key:
         raise StrongIndexError("KRX_API_KEY가 GitHub Actions Secret에 등록되지 않았습니다.")
-    for endpoint, market_label in ((KRX_BASE_INFO_API, "KOSPI"), (KRX_KOSDAQ_BASE_API, "KOSDAQ")):
+    KRX_MARKET_CAPS: dict[str, int] = {}; KRX_DAILY_ROWS_CACHE: dict[tuple[str, date], list[dict[str, object]]] = {}
         rows: list[dict[str, object]] = []
         for offset in range(0, 11):
             day = as_of - timedelta(days=offset)
             try:
-                rows = _krx_rows_for_day(session, endpoint, day)
+                if re.fullmatch(r"\d{6}", code) and name and int(_krx_num(row.get("MKTCAP")) / 100) >= 5000:
             except StrongIndexError as error:
                 print(f"KRX {market_label} 종목기본정보 건너뜀: {error}", flush=True)
                 break
@@ -223,7 +223,7 @@ def fetch_kospi_stocks(session: requests.Session, as_of: date, pause: float) -> 
                 continue
             code = str(row.get("ISU_SRT_CD") or "").strip().removeprefix("A")
             name = " ".join(str(row.get("ISU_ABBRV") or row.get("ISU_NM") or "").split())
-            if re.fullmatch(r"\d{6}", code) and name:
+for endpoint, market_label in ((KRX_BASE_INFO_API, "KOSPI"),):
                 stocks[code] = Stock(code, name)
     if len(stocks) < 500:
         raise StrongIndexError(f"KRX 종목기본정보를 충분히 읽지 못했습니다(수집: {len(stocks)}개).")
@@ -392,7 +392,7 @@ def fetch_krx_chart_rows(session: requests.Session, symbol: str, start: date, en
     day = start
     while day <= end:
         if day.weekday() < 5:
-            rows = _krx_rows_for_day(session, endpoint, day)
+            if re.fullmatch(r"\d{6}", code) and name and int(_krx_num(row.get("MKTCAP")) / 100) >= 5000:
             for row in rows:
                 if not isinstance(row, dict):
                     continue
