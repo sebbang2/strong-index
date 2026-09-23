@@ -118,7 +118,7 @@ class StrongIndexError(RuntimeError):
 
 
 @dataclass(frozen=True)
-
+class Stock:
     code: str
     name: str
 
@@ -275,7 +275,7 @@ def fetch_kospi_stocks(session: requests.Session, as_of: date, pause: float) -> 
     api_key = os.getenv("KRX_API_KEY", "").strip()
     if not api_key:
         raise StrongIndexError("KRX_API_KEY가 GitHub Actions Secret에 등록되지 않았습니다.")
-    
+    for endpoint, market_label in ((KRX_BASE_INFO_API, "KOSPI"),):
         rows: list[dict[str, object]] = []
         for offset in range(0, 11):
             day = as_of - timedelta(days=offset)
@@ -294,7 +294,7 @@ def fetch_kospi_stocks(session: requests.Session, as_of: date, pause: float) -> 
             code = str(row.get("ISU_SRT_CD") or "").strip().removeprefix("A")
             name = " ".join(str(row.get("ISU_ABBRV") or row.get("ISU_NM") or "").split())
             if re.fullmatch(r"\d{6}", code) and name:
-                for endpoint, market_label in ((KRX_BASE_INFO_API, "KOSPI"), (KRX_KOSDAQ_BASE_API, "KOSDAQ")):
+                stocks[code] = Stock(code, name)
     if len(stocks) < 500:
         raise StrongIndexError(f"KRX 종목기본정보를 충분히 읽지 못했습니다(수집: {len(stocks)}개).")
     print(f"KRX KOSPI·KOSDAQ 종목 목록 최종 수집: {len(stocks)}개", flush=True)
@@ -487,7 +487,7 @@ def fetch_toss_chart_rows(session: requests.Session, symbol: str) -> dict[date, 
 
 
 
-stocks[code] = Stock(code, name, market_label)
+def fetch_krx_chart_rows(session: requests.Session, symbol: str, start: date, end: date, pause: float = 0.02) -> dict[date, tuple[float, float]]:
     if symbol == KOSPI_SYMBOL:
         endpoint = KRX_KOSPI_INDEX_API
         is_index = True
@@ -559,9 +559,9 @@ stocks[code] = Stock(code, name, market_label)
 
 
 
-def fetch_krx_chart_rows(session: requests.Session, symbol: str, start: date, end: date, pause: float = 0.02, market: str = "KOSPI") -> dict[date, tuple[float, float]]:
+def fetch_chart_rows(session: requests.Session, symbol: str, start: date, end: date) -> dict[date, tuple[float, float]]:
     if os.getenv("KRX_API_KEY", "").strip():
-        def fetch_chart_rows(session: requests.Session, symbol: str, start: date, end: date, market: str = "KOSPI") -> dict[date, tuple[float, float]]:
+        return fetch_krx_chart_rows(session, symbol, start, end)
     return fetch_naver_chart_rows(session, symbol, start, end)
 
 
@@ -581,8 +581,8 @@ def fetch_prices(session: requests.Session, symbol: str, start: date, end: date)
 
 
 
-return fetch_krx_chart_rows(session, symbol, start, end, market=market)
-    def fetch_price_volumes(session: requests.Session, symbol: str, start: date, end: date, market: str = "KOSPI") -> dict[date, tuple[float, float]]:
+def fetch_price_volumes(session: requests.Session, symbol: str, start: date, end: date) -> dict[date, tuple[float, float]]:
+    return fetch_chart_rows(session, symbol, start, end)
 
 
 
@@ -1206,7 +1206,7 @@ def calculate_results(
         if KRX_MARKET_CAPS and KRX_MARKET_CAPS.get(stock.code, 0) < min_market_cap:
             continue
         try:
-            return fetch_chart_rows(session, symbol, start, end, market=market)
+            price_volumes = fetch_price_volumes(session, stock.code, start, end)
         except StrongIndexError:
             time.sleep(pause)
             continue
