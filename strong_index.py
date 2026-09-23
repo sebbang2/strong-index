@@ -37,6 +37,11 @@ NAVER_CHART_API = "https://api.stock.naver.com/chart/domestic"
 NAVER_STOCK_LIST_API = "https://api.stock.naver.com/stock/exchange/KOSPI/marketValue"
 KRX_BASE_INFO_API = "https://data-dbg.krx.co.kr/svc/apis/sto/stk_isu_base_info"
 KRX_MARKET_CAPS: dict[str, int] = {}
+KRX_KOSDAQ_BASE_API = "https://data-dbg.krx.co.kr/svc/apis/sto/ksq_isu_base_info"
+KRX_KOSPI_DAILY_API = "https://data-dbg.krx.co.kr/svc/apis/sto/stk_bydd_trd"
+KRX_KOSDAQ_DAILY_API = "https://data-dbg.krx.co.kr/svc/apis/sto/ksq_bydd_trd"
+KRX_KOSPI_INDEX_API = "https://data-dbg.krx.co.kr/svc/apis/idx/kospi_dd_trd"
+KRX_KOSDAQ_INDEX_API = "https://data-dbg.krx.co.kr/svc/apis/idx/kosdaq_dd_trd"
 KOSPI_SYMBOL = "KOSPI"
 KOSDAQ_SYMBOL = "KOSDAQ"
 ETF_DISPLAY_LIMIT = 3
@@ -170,49 +175,59 @@ def request(session: requests.Session, url: str, **kwargs: object) -> requests.R
         raise StrongIndexError(f"네이버증권에 연결하지 못했습니다: {error}") from error
 
 
+def _krx_rows_for_day(session: requests.Session, endpoint: str, day: date) -> list[dict[str, object]]:
+    api_key = os.getenv("KRX_API_KEY", "").strip()
+    if not api_key:
+        raise StrongIndexError("KRX_API_KEY가 없습니다.")
+    try:
+        response = session.get(endpoint, params={"basDd": day.strftime("%Y%m%d")}, headers={"AUTH_KEY": api_key, "Accept": "application/json"}, timeout=20)
+        response.raise_for_status()
+        payload = response.json()
+    except (requests.RequestException, ValueError) as error:
+        raise StrongIndexError(f"KRX API 호출 실패({endpoint.rsplit('/', 1)[-1]}): {error}") from error
+    rows = payload.get("OutBlock_1", []) if isinstance(payload, dict) else []
+    return rows if isinstance(rows, list) else []
+
+
+def _krx_num(value: object) -> float:
+    text = str(value or "").replace(",", "").strip()
+    if not text or text in {"-", "—"}:
+        return 0.0
+    try:
+        return float(text)
+    except ValueError:
+        return 0.0
+
+
 def fetch_kospi_stocks(session: requests.Session, as_of: date, pause: float) -> list[Stock]:
     """KRX 종목기본정보에서 KOSPI·KOSDAQ 전체 상장종목을 읽는다."""
+    stocks: dict[str, Stock] = {}
     api_key = os.getenv("KRX_API_KEY", "").strip()
     if not api_key:
         raise StrongIndexError("KRX_API_KEY가 GitHub Actions Secret에 등록되지 않았습니다.")
-
-    rows: list[dict[str, object]] = []
-    # 휴장일에는 최근 영업일 자료를 찾기 위해 최대 10일 역산한다.
-    for offset in range(0, 11):
-        bas_dd = (as_of - timedelta(days=offset)).strftime("%Y%m%d")
-        try:
-            response = session.get(
-                KRX_BASE_INFO_API,
-                params={"basDd": bas_dd, "AUTH_KEY": api_key},
-                headers={"Accept": "application/json"},
-                timeout=20,
-            )
-            response.raise_for_status()
-            payload = response.json()
-        except (requests.RequestException, ValueError) as error:
-            if offset == 10:
-                raise StrongIndexError(f"KRX 종목기본정보 API에 연결하지 못했습니다: {error}") from error
-            continue
-        rows = payload.get("OutBlock_1", []) if isinstance(payload, dict) else []
-        if not isinstance(rows, list):
-            rows = []
-        if rows:
-            print(f"KRX 종목기본정보 기준일: {bas_dd}", flush=True)
-            break
-        time.sleep(pause)
-
-    stocks: dict[str, Stock] = {}
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        market = str(row.get("MKT_TP_NM") or row.get("MKT_NM") or "").strip().upper()
-        code = str(row.get("ISU_SRT_CD") or row.get("ISU_CD") or "").strip().removeprefix("A")
-        name = " ".join(str(row.get("ISU_ABBRV") or row.get("ISU_NM") or "").split())
-        if market in {"KOSPI", "KOSDAQ"} and re.fullmatch(r"\d{6}", code) and name:
-            stocks[code] = Stock(code, name)
+    for endpoint, market_label in ((KRX_BASE_INFO_API, "KOSPI"), (KRX_KOSDAQ_BASE_API, "KOSDAQ")):
+        rows: list[dict[str, object]] = []
+        for offset in range(0, 11):
+            day = as_of - timedelta(days=offset)
+            try:
+                rows = _krx_rows_for_day(session, endpoint, day)
+            except StrongIndexError as error:
+                print(f"KRX {market_label} 종목기본정보 건너뜀: {error}", flush=True)
+                break
+            if rows:
+                print(f"KRX {market_label} 종목기본정보 기준일: {day:%Y%m%d}", flush=True)
+                break
+            time.sleep(pause)
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            code = str(row.get("ISU_SRT_CD") or "").strip().removeprefix("A")
+            name = " ".join(str(row.get("ISU_ABBRV") or row.get("ISU_NM") or "").split())
+            if re.fullmatch(r"\d{6}", code) and name:
+                stocks[code] = Stock(code, name)
     if len(stocks) < 500:
-        raise StrongIndexError(f"KRX 유가증권(KOSPI) 종목기본정보를 충분히 읽지 못했습니다(수집: {len(stocks)}개).")
-    print(f"KRX 유가증권(KOSPI) 종목 목록 최종 수집: {len(stocks)}개", flush=True)
+        raise StrongIndexError(f"KRX 종목기본정보를 충분히 읽지 못했습니다(수집: {len(stocks)}개).")
+    print(f"KRX KOSPI·KOSDAQ 종목 목록 최종 수집: {len(stocks)}개", flush=True)
     return list(stocks.values())
 
 def parse_price_volume_rows(payload: str) -> dict[date, tuple[float, float]]:
@@ -363,10 +378,66 @@ def fetch_toss_chart_rows(session: requests.Session, symbol: str) -> dict[date, 
     return records
 
 
+def fetch_krx_chart_rows(session: requests.Session, symbol: str, start: date, end: date, pause: float = 0.02) -> dict[date, tuple[float, float]]:
+    if symbol == KOSPI_SYMBOL:
+        endpoint = KRX_KOSPI_INDEX_API
+        is_index = True
+    elif symbol == KOSDAQ_SYMBOL:
+        endpoint = KRX_KOSDAQ_INDEX_API
+        is_index = True
+    else:
+        endpoint = KRX_KOSPI_DAILY_API
+        is_index = False
+    records: dict[date, tuple[float, float]] = {}
+    day = start
+    while day <= end:
+        if day.weekday() < 5:
+            rows = _krx_rows_for_day(session, endpoint, day)
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                row_day_text = re.sub(r"\D", "", str(row.get("BAS_DD", "")))
+                if len(row_day_text) != 8:
+                    continue
+                try:
+                    row_day = date(int(row_day_text[:4]), int(row_day_text[4:6]), int(row_day_text[6:]))
+                except ValueError:
+                    continue
+                if is_index:
+                    index_name = str(row.get("IDX_NM") or "")
+                    if symbol == KOSPI_SYMBOL and index_name not in {"KOSPI", "코스피"} and "KOSPI" not in index_name.upper():
+                        continue
+                    if symbol == KOSDAQ_SYMBOL and index_name not in {"KOSDAQ", "코스닥"} and "KOSDAQ" not in index_name.upper():
+                        continue
+                    close = _krx_num(row.get("CLSPRC_IDX"))
+                    volume = _krx_num(row.get("ACC_TRDVOL"))
+                    code = symbol
+                else:
+                    raw_code = str(row.get("ISU_CD") or row.get("ISU_SRT_CD") or "")
+                    match = re.search(r"(\d{6})$", raw_code)
+                    if not match or match.group(1) != symbol:
+                        continue
+                    close = _krx_num(row.get("TDD_CLSPRC"))
+                    volume = _krx_num(row.get("ACC_TRDVOL"))
+                    cap = _krx_num(row.get("MKTCAP"))
+                    if cap:
+                        KRX_MARKET_CAPS[symbol] = int(cap / 100)
+                if close > 0:
+                    records[row_day] = (close, volume)
+                    if is_index:
+                        break
+            time.sleep(pause)
+        day += timedelta(days=1)
+    if len(records) < 20:
+        raise StrongIndexError(f"KRX {symbol} 일별 데이터가 부족합니다({len(records)}일).")
+    return records
+
+
 def fetch_chart_rows(session: requests.Session, symbol: str, start: date, end: date) -> dict[date, tuple[float, float]]:
-    if os.getenv("TOSS_CLIENT_ID") and os.getenv("TOSS_CLIENT_SECRET"):
-        return fetch_toss_chart_rows(session, symbol)
+    if os.getenv("KRX_API_KEY", "").strip():
+        return fetch_krx_chart_rows(session, symbol, start, end)
     return fetch_naver_chart_rows(session, symbol, start, end)
+
 
 def fetch_prices(session: requests.Session, symbol: str, start: date, end: date) -> dict[date, float]:
     return {day: close for day, (close, _) in fetch_chart_rows(session, symbol, start, end).items()}
