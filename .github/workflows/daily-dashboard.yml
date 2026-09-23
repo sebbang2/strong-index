@@ -6,6 +6,11 @@ on:
   schedule:
     - cron: "0 7 * * 1-5"
   workflow_dispatch:
+    inputs:
+      backfill_dates:
+        description: "쉼표로 구분한 과거 거래일(예: 2026-09-10,2026-09-11). 비워두면 오늘만 수집"
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -30,22 +35,27 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
-
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
-
       - name: Collect market data and build dashboard
         run: |
-          python strong_index.py --pause 0.2
+          if [ -n "${{ inputs.backfill_dates }}" ]; then
+            IFS=',' read -ra DATES <<< "${{ inputs.backfill_dates }}"
+            for day in "\${DATES[@]}"; do
+              day="\$(echo "\$day" | xargs)"
+              echo "Backfilling \$day"
+              python strong_index.py --pause 0.2 --as-of "\$day"
+            done
+          else
+            python strong_index.py --pause 0.2
+          fi
           python build_dashboard.py
           cp output/strong_index_dashboard.html index.html
-
       - name: Save accumulated data in repository
         run: |
           git config user.name "github-actions[bot]"
@@ -53,21 +63,17 @@ jobs:
           git add index.html output
           git diff --cached --quiet || git commit -m "chore: update strong index dashboard"
           git push
-
       - name: Prepare GitHub Pages files
         run: |
           mkdir -p public
           cp output/strong_index_dashboard.html public/index.html
           touch public/.nojekyll
-
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
-
       - name: Upload GitHub Pages artifact
         uses: actions/upload-pages-artifact@v4
         with:
           path: public
-
-      - name: Deploy to GitHub Pages
+      - name: Deploy dashboard
         id: deployment
         uses: actions/deploy-pages@v4
