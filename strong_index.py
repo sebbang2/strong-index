@@ -247,9 +247,7 @@ def fetch_kospi_stocks(session: requests.Session, as_of: date, pause: float) -> 
                 continue
             code = str(row.get("ISU_SRT_CD") or "").strip().removeprefix("A")
             name = " ".join(str(row.get("ISU_ABBRV") or row.get("ISU_NM") or "").split())
-            market_cap = int(_krx_num(row.get("MKTCAP")) / 100)
-            if re.fullmatch(r"\d{6}", code) and name and market_cap >= 5000:
-                KRX_MARKET_CAPS[code] = market_cap
+            if re.fullmatch(r"\d{6}", code) and name:
                 stocks[code] = Stock(code, name)
     if len(stocks) < 500:
         raise StrongIndexError(f"KRX 종목기본정보를 충분히 읽지 못했습니다(수집: {len(stocks)}개).")
@@ -432,12 +430,18 @@ def fetch_krx_chart_rows(session: requests.Session, symbol: str, start: date, en
     while day <= end:
         if day.weekday() < 5:
             cache_key = (endpoint, day)
-            cache_hit = cache_key in KRX_DAILY_ROWS_CACHE
             rows = KRX_DAILY_ROWS_CACHE.get(cache_key)
             if rows is None:
                 rows = _krx_rows_for_day(session, endpoint, day)
                 KRX_DAILY_ROWS_CACHE[cache_key] = rows
                 time.sleep(pause)
+                for cached_row in rows:
+                    if isinstance(cached_row, dict):
+                        raw_code = str(cached_row.get("ISU_CD") or cached_row.get("ISU_SRT_CD") or "")
+                        match = re.search(r"(\d{6})$", raw_code)
+                        cap = _krx_num(cached_row.get("MKTCAP"))
+                        if match and cap:
+                            KRX_MARKET_CAPS[match.group(1)] = int(cap / 100)
             for row in rows:
                 if not isinstance(row, dict):
                     continue
@@ -1035,6 +1039,8 @@ def calculate_results(
     results: list[Result] = []
     for number, stock in enumerate(stocks, start=1):
         print(f"시세 분석 중: {number}/{len(stocks)} {stock.name}", end="\r", flush=True)
+        if KRX_MARKET_CAPS and KRX_MARKET_CAPS.get(stock.code, 0) < min_market_cap:
+            continue
         try:
             price_volumes = fetch_price_volumes(session, stock.code, start, end)
         except StrongIndexError:
