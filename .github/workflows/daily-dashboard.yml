@@ -46,10 +46,10 @@ jobs:
         run: |
           if [ -n "${{ inputs.backfill_dates }}" ]; then
             IFS=',' read -ra DATES <<< "${{ inputs.backfill_dates }}"
-            for day in "\${DATES[@]}"; do
-              day="\$(echo "\$day" | xargs)"
-              echo "Backfilling \$day"
-              python strong_index.py --pause 0.2 --as-of "\$day"
+            for day in "${DATES[@]}"; do
+              day="$(echo "$day" | xargs)"
+              echo "Backfilling $day"
+              python strong_index.py --pause 0.2 --as-of "$day"
             done
           else
             python strong_index.py --pause 0.2
