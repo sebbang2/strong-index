@@ -495,7 +495,7 @@ def fetch_krx_chart_rows(session: requests.Session, symbol: str, start: date, en
         endpoint = KRX_KOSDAQ_INDEX_API
         is_index = True
     else:
-        endpoint = KRX_KOSPI_DAILY_API
+        endpoint = KRX_KOSDAQ_DAILY_API if market == "KOSDAQ" else KRX_KOSPI_DAILY_API
         is_index = False
     records: dict[date, tuple[float, float]] = {}
     day = start
