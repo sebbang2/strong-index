@@ -9,7 +9,9 @@ RS 지수 = (종목의 기간 누적수익률 / 코스피의 기간 누적수익
     python strong_index.py --lookback-days 180 --min-rs 105
 """
 
+
 from __future__ import annotations
+
 
 import argparse
 import ast
@@ -24,8 +26,11 @@ from datetime import date, timedelta
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+
 import requests
 from bs4 import BeautifulSoup
+
+
 
 
 OUTPUT_DIR = Path("output")
@@ -36,7 +41,7 @@ PRICE_API = "https://api.finance.naver.com/siseJson.naver"
 NAVER_CHART_API = "https://api.stock.naver.com/chart/domestic"
 NAVER_STOCK_LIST_API = "https://api.stock.naver.com/stock/exchange/KOSPI/marketValue"
 KRX_BASE_INFO_API = "https://data-dbg.krx.co.kr/svc/apis/sto/stk_isu_base_info"
-
+KRX_MARKET_CAPS: dict[str, int] = {}
 KRX_KOSDAQ_BASE_API = "https://data-dbg.krx.co.kr/svc/apis/sto/ksq_isu_base_info"
 KRX_KOSPI_DAILY_API = "https://data-dbg.krx.co.kr/svc/apis/sto/stk_bydd_trd"
 KRX_KOSDAQ_DAILY_API = "https://data-dbg.krx.co.kr/svc/apis/sto/ksq_bydd_trd"
@@ -85,8 +90,12 @@ CSV_FIELDS = [
 ]
 
 
+
+
 class StrongIndexError(RuntimeError):
     """실행 화면에 안내할 수 있는 오류."""
+
+
 
 
 @dataclass(frozen=True)
@@ -95,11 +104,15 @@ class Stock:
     name: str
 
 
+
+
 @dataclass(frozen=True)
 class Etf:
     code: str
     name: str
     market_cap: int
+
+
 
 
 @dataclass(frozen=True)
@@ -123,6 +136,8 @@ class Result:
     etf_trend_good: str = "미확인"
     etf_names: str = ""
     etf_details: str = ""
+
+
 
 
 # 자주 쓰이는 성장 산업/테마를 우선 분류한다. 한 종목이 여러 조건에 맞으면 모두 표시한다.
@@ -166,6 +181,8 @@ THEME_RULES: tuple[tuple[set[str], str, str], ...] = (
 )
 
 
+
+
 def request(session: requests.Session, url: str, **kwargs: object) -> requests.Response:
     try:
         response = session.get(url, headers=HEADERS, timeout=15, **kwargs)
@@ -173,6 +190,8 @@ def request(session: requests.Session, url: str, **kwargs: object) -> requests.R
         return response
     except requests.RequestException as error:
         raise StrongIndexError(f"네이버증권에 연결하지 못했습니다: {error}") from error
+
+
 
 
 def _krx_rows_for_day(session: requests.Session, endpoint: str, day: date) -> list[dict[str, object]]:
@@ -189,6 +208,8 @@ def _krx_rows_for_day(session: requests.Session, endpoint: str, day: date) -> li
     return rows if isinstance(rows, list) else []
 
 
+
+
 def _krx_num(value: object) -> float:
     text = str(value or "").replace(",", "").strip()
     if not text or text in {"-", "—"}:
@@ -199,18 +220,20 @@ def _krx_num(value: object) -> float:
         return 0.0
 
 
+
+
 def fetch_kospi_stocks(session: requests.Session, as_of: date, pause: float) -> list[Stock]:
     """KRX 종목기본정보에서 KOSPI·KOSDAQ 전체 상장종목을 읽는다."""
     stocks: dict[str, Stock] = {}
     api_key = os.getenv("KRX_API_KEY", "").strip()
     if not api_key:
         raise StrongIndexError("KRX_API_KEY가 GitHub Actions Secret에 등록되지 않았습니다.")
-    KRX_MARKET_CAPS: dict[str, int] = {}; KRX_DAILY_ROWS_CACHE: dict[tuple[str, date], list[dict[str, object]]] = {}
+    for endpoint, market_label in ((KRX_BASE_INFO_API, "KOSPI"), (KRX_KOSDAQ_BASE_API, "KOSDAQ")):
         rows: list[dict[str, object]] = []
         for offset in range(0, 11):
             day = as_of - timedelta(days=offset)
             try:
-                if re.fullmatch(r"\d{6}", code) and name and int(_krx_num(row.get("MKTCAP")) / 100) >= 5000:
+                rows = _krx_rows_for_day(session, endpoint, day)
             except StrongIndexError as error:
                 print(f"KRX {market_label} 종목기본정보 건너뜀: {error}", flush=True)
                 break
@@ -223,12 +246,13 @@ def fetch_kospi_stocks(session: requests.Session, as_of: date, pause: float) -> 
                 continue
             code = str(row.get("ISU_SRT_CD") or "").strip().removeprefix("A")
             name = " ".join(str(row.get("ISU_ABBRV") or row.get("ISU_NM") or "").split())
-for endpoint, market_label in ((KRX_BASE_INFO_API, "KOSPI"),):
+            if re.fullmatch(r"\d{6}", code) and name:
                 stocks[code] = Stock(code, name)
     if len(stocks) < 500:
         raise StrongIndexError(f"KRX 종목기본정보를 충분히 읽지 못했습니다(수집: {len(stocks)}개).")
     print(f"KRX KOSPI·KOSDAQ 종목 목록 최종 수집: {len(stocks)}개", flush=True)
     return list(stocks.values())
+
 
 def parse_price_volume_rows(payload: str) -> dict[date, tuple[float, float]]:
     """네이버의 자바스크립트 배열 형식 시세를 날짜:(종가, 거래량)으로 바꾼다."""
@@ -237,6 +261,7 @@ def parse_price_volume_rows(payload: str) -> dict[date, tuple[float, float]]:
         rows = ast.literal_eval(text)
     except (SyntaxError, ValueError) as error:
         raise StrongIndexError("네이버 시세 데이터 형식을 해석하지 못했습니다.") from error
+
 
     records: dict[date, tuple[float, float]] = {}
     for row in rows[1:]:  # 첫 행은 ['날짜', '시가', '고가', '저가', '종가', '거래량'] 헤더
@@ -257,8 +282,12 @@ def parse_price_volume_rows(payload: str) -> dict[date, tuple[float, float]]:
     return records
 
 
+
+
 def parse_price_rows(payload: str) -> dict[date, float]:
     return {day: close for day, (close, _) in parse_price_volume_rows(payload).items()}
+
+
 
 
 def fetch_naver_chart_rows(session: requests.Session, symbol: str, start: date, end: date) -> dict[date, tuple[float, float]]:
@@ -312,6 +341,9 @@ def fetch_naver_chart_rows(session: requests.Session, symbol: str, start: date, 
 
 
 
+
+
+
 def toss_access_token(session: requests.Session) -> str:
     client_id = os.getenv("TOSS_CLIENT_ID", "").strip()
     client_secret = os.getenv("TOSS_CLIENT_SECRET", "").strip()
@@ -335,6 +367,8 @@ def toss_access_token(session: requests.Session) -> str:
     if not token:
         raise StrongIndexError("토스증권 API 인증 토큰을 받지 못했습니다.")
     return token
+
+
 
 
 def fetch_toss_chart_rows(session: requests.Session, symbol: str) -> dict[date, tuple[float, float]]:
@@ -378,6 +412,8 @@ def fetch_toss_chart_rows(session: requests.Session, symbol: str) -> dict[date, 
     return records
 
 
+
+
 def fetch_krx_chart_rows(session: requests.Session, symbol: str, start: date, end: date, pause: float = 0.02) -> dict[date, tuple[float, float]]:
     if symbol == KOSPI_SYMBOL:
         endpoint = KRX_KOSPI_INDEX_API
@@ -392,7 +428,7 @@ def fetch_krx_chart_rows(session: requests.Session, symbol: str, start: date, en
     day = start
     while day <= end:
         if day.weekday() < 5:
-            if re.fullmatch(r"\d{6}", code) and name and int(_krx_num(row.get("MKTCAP")) / 100) >= 5000:
+            rows = _krx_rows_for_day(session, endpoint, day)
             for row in rows:
                 if not isinstance(row, dict):
                     continue
@@ -433,18 +469,25 @@ def fetch_krx_chart_rows(session: requests.Session, symbol: str, start: date, en
     return records
 
 
+
+
 def fetch_chart_rows(session: requests.Session, symbol: str, start: date, end: date) -> dict[date, tuple[float, float]]:
     if os.getenv("KRX_API_KEY", "").strip():
         return fetch_krx_chart_rows(session, symbol, start, end)
     return fetch_naver_chart_rows(session, symbol, start, end)
 
 
+
+
 def fetch_prices(session: requests.Session, symbol: str, start: date, end: date) -> dict[date, float]:
     return {day: close for day, (close, _) in fetch_chart_rows(session, symbol, start, end).items()}
 
 
+
+
 def fetch_price_volumes(session: requests.Session, symbol: str, start: date, end: date) -> dict[date, tuple[float, float]]:
     return fetch_chart_rows(session, symbol, start, end)
+
 
 def naver_industry(session: requests.Session, stock: Stock) -> str:
     """분류 규칙에 없는 종목에 쓸 네이버증권의 업종명을 찾는다."""
@@ -457,6 +500,7 @@ def naver_industry(session: requests.Session, stock: Stock) -> str:
         if matched and matched.group(1).strip():
             return matched.group(1).strip()
 
+
     # 이전 화면 구조도 지원한다.
     for heading in soup.find_all(["th", "dt"]):
         # '업종 PER'도 함께 있으므로 부분 일치가 아니라 업종 필드만 정확히 고른다.
@@ -468,6 +512,8 @@ def naver_industry(session: requests.Session, stock: Stock) -> str:
             if industry:
                 return industry
     return "기타"
+
+
 
 
 def naver_market_cap(session: requests.Session, stock: Stock) -> int:
@@ -483,6 +529,8 @@ def naver_market_cap(session: requests.Session, stock: Stock) -> int:
             if digits:
                 return int(digits)
     raise StrongIndexError(f"{stock.name}의 시가총액 정보를 읽지 못했습니다.")
+
+
 
 
 def naver_theme_memberships(
@@ -504,6 +552,7 @@ def naver_theme_memberships(
         except (json.JSONDecodeError, OSError, TypeError):
             pass
 
+
     theme_links: list[tuple[str, str]] = []
     first = request(session, f"{NAVER_FINANCE}/sise/theme.naver", params={"page": 1})
     first_soup = BeautifulSoup(first.text, "html.parser")
@@ -519,6 +568,7 @@ def naver_theme_memberships(
         listing_soups.append(BeautifulSoup(response.text, "html.parser"))
         time.sleep(pause)
 
+
     seen_theme_numbers: set[str] = set()
     for soup in listing_soups:
         for link in soup.select("a[href*='sise_group_detail.naver?type=theme']"):
@@ -528,6 +578,7 @@ def naver_theme_memberships(
             if theme_name and number and number not in seen_theme_numbers:
                 seen_theme_numbers.add(number)
                 theme_links.append((theme_name, href))
+
 
     memberships: dict[str, list[str]] = {}
     for number, (theme_name, href) in enumerate(theme_links, start=1):
@@ -553,6 +604,8 @@ def naver_theme_memberships(
     return {code: memberships.get(code, []) for code in target_codes}
 
 
+
+
 def naver_themes_for_results(
     session: requests.Session,
     results: list[Result],
@@ -564,6 +617,8 @@ def naver_themes_for_results(
         replace(item, theme=" / ".join(memberships[item.stock.code]) or item.theme)
         for item in results
     ]
+
+
 
 
 def naver_industry_memberships(
@@ -582,6 +637,7 @@ def naver_industry_memberships(
         except (json.JSONDecodeError, OSError, TypeError):
             pass
 
+
     response = request(session, f"{NAVER_FINANCE}/sise/sise_group.naver", params={"type": "upjong"})
     listing_soup = BeautifulSoup(response.text, "html.parser")
     industry_links: list[tuple[str, str]] = []
@@ -593,6 +649,7 @@ def naver_industry_memberships(
         if industry_name and number and number not in seen_numbers:
             seen_numbers.add(number)
             industry_links.append((industry_name, href))
+
 
     memberships: dict[str, str] = {}
     for number, (industry_name, href) in enumerate(industry_links, start=1):
@@ -615,6 +672,8 @@ def naver_industry_memberships(
     return {code: memberships.get(code, "") for code in target_codes}
 
 
+
+
 def naver_industries_for_results(
     session: requests.Session,
     results: list[Result],
@@ -626,6 +685,8 @@ def naver_industries_for_results(
         replace(item, industry=memberships[item.stock.code] or item.industry)
         for item in results
     ]
+
+
 
 
 def refresh_saved_themes(session: requests.Session, pause: float) -> int:
@@ -655,6 +716,8 @@ def refresh_saved_themes(session: requests.Session, pause: float) -> int:
     return updated
 
 
+
+
 def refresh_saved_industries(session: requests.Session, pause: float) -> int:
     """Update industries in all accumulated daily rows from Naver 업종별 시세."""
     if not HISTORY_FILE.exists():
@@ -680,6 +743,8 @@ def refresh_saved_industries(session: requests.Session, pause: float) -> int:
     return updated
 
 
+
+
 def classify_stock(session: requests.Session, stock: Stock) -> tuple[str, str]:
     matched = [(industry, theme) for names, industry, theme in THEME_RULES if stock.name in names]
     if matched:
@@ -691,6 +756,8 @@ def classify_stock(session: requests.Session, stock: Stock) -> tuple[str, str]:
     except StrongIndexError:
         # 개별 종목 페이지 하나의 실패가 전체 200종목 분석을 중단시키지 않도록 한다.
         return "기타", "개별 테마 확인 필요"
+
+
 
 
 def fetch_etfs(session: requests.Session) -> list[Etf]:
@@ -714,6 +781,8 @@ def fetch_etfs(session: requests.Session) -> list[Etf]:
     return list(etfs.values())
 
 
+
+
 def fetch_top_holdings(session: requests.Session, etf: Etf) -> list[dict[str, object]]:
     """ETF 상세 화면에 공개된 구성비중 상위 종목을 비중순으로 읽는다."""
     response = request(session, f"{NAVER_FINANCE}/item/main.naver", params={"code": etf.code})
@@ -728,6 +797,7 @@ def fetch_top_holdings(session: requests.Session, etf: Etf) -> list[dict[str, ob
     )
     if table is None:
         return []
+
 
     holdings: list[dict[str, object]] = []
     for row in table.select("tr"):
@@ -751,8 +821,12 @@ def fetch_top_holdings(session: requests.Session, etf: Etf) -> list[dict[str, ob
     return holdings
 
 
+
+
 def etf_holdings_cache_path(run_date: str) -> Path:
     return OUTPUT_DIR / f"etf_top_holdings_{run_date}.json"
+
+
 
 
 def find_etf_candidates(
@@ -766,6 +840,7 @@ def find_etf_candidates(
     cache_path = etf_holdings_cache_path(run_date)
     target_codes = {stock.code for stock in stocks}
     matches: dict[str, list[dict[str, object]]] = {code: [] for code in target_codes}
+
 
     if cache_path.exists():
         try:
@@ -790,6 +865,7 @@ def find_etf_candidates(
                 return {code: cached_matches.get(code, []) for code in target_codes}
         except (json.JSONDecodeError, OSError):
             pass
+
 
     etfs = fetch_etfs(session)
     etfs_by_code = {etf.code: etf for etf in etfs}
@@ -828,6 +904,7 @@ def find_etf_candidates(
                 return matches
         except (json.JSONDecodeError, OSError, KeyError, TypeError):
             pass
+
 
     master_holdings: dict[str, list[dict[str, object]]] = {}
     for number, etf in enumerate(etfs, start=1):
@@ -874,6 +951,8 @@ def find_etf_candidates(
     return matches
 
 
+
+
 def etf_trend_labels(
     session: requests.Session,
     candidates: dict[str, list[dict[str, object]]],
@@ -901,6 +980,7 @@ def etf_trend_labels(
             pass
         time.sleep(pause)
     print(" " * 100, end="\r")
+
 
     labels: dict[str, tuple[str, str, str]] = {}
     for stock_code, items in candidates.items():
@@ -930,6 +1010,8 @@ def etf_trend_labels(
     return labels
 
 
+
+
 def calculate_results(
     session: requests.Session,
     stocks: list[Stock],
@@ -950,6 +1032,7 @@ def calculate_results(
         except StrongIndexError:
             time.sleep(pause)
             continue
+
 
         prices = {day: close for day, (close, _) in price_volumes.items()}
         volumes = {day: volume for day, (_, volume) in price_volumes.items()}
@@ -1016,6 +1099,8 @@ def calculate_results(
     return sorted(results, key=lambda item: item.rs_index, reverse=True)
 
 
+
+
 def save_history(results: list[Result], run_date: str) -> int:
     OUTPUT_DIR.mkdir(exist_ok=True)
     old_rows: list[dict[str, str]] = []
@@ -1053,6 +1138,7 @@ def save_history(results: list[Result], run_date: str) -> int:
             }
         )
 
+
     # 같은 날짜에 다시 실행하면 기존 행을 갱신한다. 다른 날짜의 누적 기록은 그대로 보존한다.
     history = [
         {field: row.get(field, "") for field in CSV_FIELDS}
@@ -1065,6 +1151,8 @@ def save_history(results: list[Result], run_date: str) -> int:
         writer.writeheader()
         writer.writerows(history)
     return sum(1 for row in new_rows if (row["run_date"], row["code"]) not in seen)
+
+
 
 
 def make_index_snapshot(index_name: str, prices: dict[date, int]) -> dict[str, str]:
@@ -1081,6 +1169,8 @@ def make_index_snapshot(index_name: str, prices: dict[date, int]) -> dict[str, s
         "ma20": f"{ma20:.2f}",
         "ma20_gap_pct": f"{(close / ma20 - 1) * 100:.2f}",
     }
+
+
 
 
 def save_index_snapshots(snapshots: list[dict[str, str]], run_date: str) -> None:
@@ -1100,6 +1190,8 @@ def save_index_snapshots(snapshots: list[dict[str, str]], run_date: str) -> None
         )
 
 
+
+
 def print_results(results: list[Result]) -> None:
     print("순위  종목명              RS지수    시가총액(억)  20일선 괴리율  거래량변화율   산업군                         ETF추세양호  ETF명")
     print("-" * 172)
@@ -1109,6 +1201,8 @@ def print_results(results: list[Result]) -> None:
             f"{item.ma20_gap:>+8.2f}%  {item.volume_change_pct:>+8.2f}%  "
             f"{item.industry:<28} {item.etf_trend_good:<7}  {item.etf_names or '-'}"
         )
+
+
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -1141,6 +1235,8 @@ def parse_arguments() -> argparse.Namespace:
     if args.min_market_cap < 0:
         parser.error("--min-market-cap은 0 이상이어야 합니다.")
     return args
+
+
 
 
 def main() -> int:
@@ -1235,12 +1331,15 @@ def main() -> int:
         return 130
 
 
+
+
 _original_re_sub = re.sub
 def _fixed_re_sub(pattern, repl, string, count=0, flags=0):
     if pattern == r"\\D":
         pattern = r"\D"
     return _original_re_sub(pattern, repl, string, count, flags)
 re.sub = _fixed_re_sub
+
 
 if __name__ == "__main__":
     raise SystemExit(main())
