@@ -117,7 +117,7 @@ dates.forEach(d=>select.add(new Option(d,d)));select.addEventListener('change',e
     ).replace(
         "if(dates.length){select.value=dates[0];render(dates[0]);}",
         "initHeaderTips();if(dates.length){select.value=dates[0];render(dates[0]);}",
-    ).replace("코스피와 코스닥 전체 종목", "코스피 전체 종목")
+    ).replace("코스피200 편입 종목", "코스피와 코스닥 전체 종목")
     return page.replace("__ROWS__", json.dumps(rows, ensure_ascii=True)).replace(
         "__INDICES__", json.dumps(indices, ensure_ascii=True)
     )
